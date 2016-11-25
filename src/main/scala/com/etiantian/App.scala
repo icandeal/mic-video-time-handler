@@ -23,7 +23,7 @@ import org.json.JSONObject
  * Hello world!
  *
  */
-case class Row(resourceId:String, userId:String, actionTime:String, point:Int)
+case class Row(resourceId:String, userId:String, cTime:String, actionTime:String, point:Int)
 case class CRow(resourceId:String, jid:String, actionTime:String, point:Int)
 case class Line(resourceId:String, userId:String, actionTime:String, endTime:String, cost:Int)
 
@@ -89,14 +89,15 @@ object App {
           val column = Bytes.toString(cell.getQualifier)
           val value = Bytes.toString(cell.getValue)
 
+
           for(i <- 2 to array.length) {
             if (column != null && column.equals(array(i))) {
               i match {
                 case 2 => {
-                  userId = value
+                  userId = value.trim
                 }
                 case 3 => {
-                  resourceId = value
+                  resourceId = value.trim
                 }
                 case 4 => {
                   cTime = format.parse(value.trim).getTime.toString
@@ -116,8 +117,9 @@ object App {
             }
           }
         }
-        (actionTime, Row(resourceId, userId, actionTime, point))
+        (actionTime, Row(resourceId, userId, cTime, actionTime, point))
       }).filter(tuple => !tuple._1.equals(""))
+
       if(hbaseRdd == null) {
         hbaseRdd = rdd
       }
