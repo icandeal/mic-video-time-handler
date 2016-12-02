@@ -1,4 +1,3 @@
-sxlogsdb_micro_course_point_log,micro_course_point_log,userId,resourceId,c_time,actionTime,point,5
-resourcelogs_resource_use_logs,resource_use_logs,jid,object_id,action_time,action_time,object_time,5
-resourcelogs_resource_time_quantum_logs,resource_time_quantum_logs,jid,object_id,action_time,action_time,start_point,5
-sxlogsdb_stu_action_data_log,stu_action_data_log,user_id,object_id,c_time,c_time,video_position,30
+sxlogsdb_micro_course_point_log,micro_course_point_log,userId,resourceId,c_time,actionTime,point,5,1
+resourcelogs_resource_use_logs,resource_use_logs,jid,object_id,action_time,action_time,object_time,5,2
+sxlogsdb_stu_action_data_log,stu_action_data_log,user_id,object_id,c_time,c_time,video_position,30,3

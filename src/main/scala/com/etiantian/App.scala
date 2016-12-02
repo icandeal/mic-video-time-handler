@@ -4,6 +4,7 @@ import java.io.{File, FileInputStream}
 import java.text.SimpleDateFormat
 import java.util.{Date, Properties}
 
+import org.apache.avro.SchemaBuilder.ArrayBuilder
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hbase.Cell
 import org.apache.hadoop.hbase.client.{Result, Scan}
@@ -19,6 +20,7 @@ import org.apache.spark.sql.{SQLContext, SaveMode}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.json.JSONObject
 
+import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.util.Try
 
@@ -26,8 +28,8 @@ import scala.util.Try
  * Hello world!
  *
  */
-case class Row(resourceId:String, userId:String, cTime:String, actionTime:String, point:Int)
-case class Line(resourceId:String, userId:String, startTime:String, endTime:String, cost:Int)
+case class Row(resourceId:String, userId:String, cTime:String, actionTime:String, point:Int, source:Int)
+case class Line(resourceId:String, userId:String, startTime:String, endTime:String, startPoint: Int, endPoint:Int, cost:Int, source:Int)
 
 object App {
   def main(args: Array[String]): Unit = {
@@ -38,7 +40,7 @@ object App {
     if (file.exists()) {
       PropertyConfigurator.configure(args(0).substring(0, args(0).lastIndexOf("/")) + "/log4j.properties")
     }
-    val logger = Logger.getLogger("MessageHandler")
+    val logger = Logger.getLogger("mic-video-time-handler")
 
 
     val configFile = new File(args(0))
@@ -49,7 +51,7 @@ object App {
     val properties = new Properties()
     properties.load(new FileInputStream(configFile))
 
-    val sparkConf = new SparkConf().setAppName("app")
+    val sparkConf = new SparkConf().setAppName("mic-video-time-handler")
     val sc = new SparkContext(sparkConf)
     val spark = new HiveContext(sc)
 
@@ -60,7 +62,7 @@ object App {
     val tableList = Source.fromFile(args(1))
 
     val format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-    var isDrop = false;
+    var isDrop = false
     val userInfo = spark.sql("select user_id userId, ett_user_id jid from user_info_mysql where ett_user_id is not null")
       .rdd.filter(row => {
       val try1 = Try(row.get(0).toString.toInt)
@@ -134,37 +136,56 @@ object App {
             }
           }
         }
-        (userId, Row(resourceId, userId, cTime, actionTime, point))
+        (userId, Row(resourceId, userId, cTime, actionTime, point, array(8).toInt))
       }).filter(tuple =>
         !tuple._1.equals("") &&
           tuple._2.point >= 0 &&
           Try(tuple._2.cTime.toLong).isSuccess &&
           Try(tuple._2.actionTime.toLong).isSuccess)
 
-      if (array(2) != null && !array(2).equals("jid")) {
+      if (array(8) != null && array(8).toInt >= 2) {  //设定小鱼2为网校（存的是jid）
         rdd = rdd.join(userInfo).filter(tuple => {
           val isnull = (tuple._2._2 != null && tuple._2._2.trim.length > 0 && !tuple._2._2.equals("null"))
           isnull
         }).map(tuple => {
           val row = tuple._2._1
           val jid = tuple._2._2
-          (row.actionTime, Row(row.resourceId, jid, row.cTime, row.actionTime, row.point))
+          (row.userId, Row(row.resourceId, jid, row.cTime, row.actionTime, row.point, row.source))
         })
       }
-      logger.warn(table + "=================================================" + rdd.count())
 
-
-
-
-      val lineList = rdd.filter(tuple => !tuple._1.equals(""))
-        .sortByKey().map(tuple =>
+      logger.warn(array(0)+"==========================================")
+      val lineList = rdd.filter(tuple => !tuple._1.equals("")).
+        map(tuple =>
         ((tuple._2.userId, tuple._2.resourceId), tuple._2))
         .groupByKey().map(tuple => {
+
+        val arrayBuffer = ArrayBuffer[Row]()
+
+        for (row <- tuple._2) {
+          arrayBuffer.append(row)
+        }
+        val rowArray = arrayBuffer.toArray
+
+        var isChanged = true
+        for(i <- 0 until rowArray.length if isChanged) {
+          var tmpRow = rowArray(0)
+          isChanged = false
+
+          for(j <- 0 until rowArray.length - i - 1){
+            if(rowArray(j).actionTime > rowArray(j+1).actionTime){
+              tmpRow = rowArray(j)
+              rowArray(j) = rowArray(j + 1)
+              rowArray(j+1) = tmpRow
+              isChanged = true
+            }
+          }
+        }
+
         val userId = tuple._1._1
         val resourceId = tuple._1._2
-        val maxLength = Math.ceil(array(array.length-1).toInt * 1.05)
-        val minLength = Math.floor(array(array.length-1).toInt * 0.95)
-
+        val maxLength = Math.ceil(array(7).toInt * 1.05)
+        val minLength = Math.floor(array(7).toInt * 0.95)
         var list = List[Line]()
 
         var actionTime1 = 0l
@@ -175,6 +196,8 @@ object App {
 
         var startTime: Date = null
         var endTime: Date = null
+        var startPoint = 0
+        var endPoint = 0
 
         var length = 0
 
@@ -183,7 +206,7 @@ object App {
 
         var index = 0
 
-        for (row <- tuple._2) {
+        for (row <- rowArray) {
           actionTime2 = row.actionTime.toLong
           cTime2 = row.cTime.toLong
           point2 = row.point
@@ -195,18 +218,21 @@ object App {
               || pointLength < 0
               || cost < minLength) {
               if (length > 0) {
-                list = list :+ Line(resourceId, userId, format.format(startTime), format.format(endTime), length)
+                list = list :+ Line(resourceId, userId, format.format(startTime), format.format(endTime), startPoint, endPoint, length, row.source)
               }
               startTime = new Date(cTime2)
+              startPoint = point2
               length = 0
             }
             else {
               length = length + pointLength
               endTime = new Date(cTime2)
+              endPoint = point2
             }
           }
           else {
             startTime = new Date(cTime2)
+            startPoint = point2
           }
           actionTime1 = actionTime2
           cTime1 = cTime2
@@ -214,35 +240,41 @@ object App {
           index = index + 1
           if (index == tuple._2.size) {
             if (length > 0) {
-              list = list :+ Line(resourceId, userId, format.format(startTime), format.format(endTime), length)
+              list = list :+ Line(resourceId, userId, format.format(startTime), format.format(endTime), startPoint, endPoint, length, row.source)
             }
           }
         }
 
         list
       }).reduce((a, b) => {
-        val c = a ::: b
-        c
-      }).map(line => {
+        a ::: b
+      })
+      logger.warn("++++++++++++++++++++++++++++++++++++++++++++++")
+      val lineListRDD = sc.parallelize(lineList).map(line => {
         val obj = new JSONObject()
         obj.put("resourceId", line.resourceId)
         obj.put("jid", line.userId)
         obj.put("startTime", line.startTime)
         obj.put("endTime", line.endTime)
+        obj.put("startPoint", line.startPoint)
+        obj.put("endPoint", line.endPoint)
         obj.put("cost", line.cost)
+        obj.put("source", line.source)
         obj.toString
       })
-      val df = spark.read.json(sc.parallelize(lineList))
+      val df = spark.read.json(lineListRDD)
       df.registerTempTable("tempTable")
-      if(!isDrop) {
+      if(!isDrop && args.length>=3 && args(2).equals("true")) {
+        logger.warn("##################################################")
         spark.sql("drop table bd_video_logs")
         spark.sql("create table bd_video_logs stored as orc as select * from tempTable")
-        logger.warn("###################################################################drop table" + df.count())
         isDrop = true
+        logger.warn("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
       }
       else {
+        logger.warn("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
         spark.sql("insert into bd_video_logs select * from tempTable")
-        logger.warn("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%" + df.count())
+        logger.warn("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
       }
     }
   }
